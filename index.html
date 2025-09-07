@@ -1,1102 +1,1020 @@
-<!DOCTYPE html>
+<!--
+README — Cricket Pressure Pro – Efficient v2 (single-file build)
+
+How to play
+- Click/tap the timing bar (or press Space) to stop the moving indicator and play a shot.
+- Choose shot type: 1=Defend, 2=Normal, 3=Attack (or tap the on-screen buttons).
+- Press “Face Delivery” to start each ball. Inputs are disabled during animations.
+- Chase a random target (150–220) in 20 overs (120 balls). Bowlers rotate every over.
+
+Skill & feedback
+- Zones when you stop the indicator (colors flash on the bar):
+  OUT (<20%), EDGE (20–35%), GOOD (35–70%), GREAT (70–100%)
+- Visual flashes for zone results. Subtle vibration on wicket/boundary (if supported).
+
+Difficulty
+- Use the slider (0.8–1.4). Higher = tougher: faster indicator, narrower GOOD/GREAT, more wicket risk.
+- Your setting persists in localStorage under key "cpp_difficulty".
+
+Tuning & data
+- All tunable constants are in Game.config (zone thresholds, risk multipliers, indicator speed, squad attributes).
+- Default squads (batters, bowlers) with simple attributes are included and easy to edit.
+
+Performance & quality
+- requestAnimationFrame + CSS transforms only. No external deps. Works offline.
+- DOM updates are batched. Animations respect “prefers-reduced-motion”.
+
+Accessibility
+- Buttons are focusable; Enter/Space triggers. ARIA labels for scoreboard, controls, commentary.
+
+Dev / Testing hooks (leave in code)
+- Game.debug.forceZone = 'perfect' | 'good' | 'edge' | 'miss' | null
+- Game.debug.nextOutcome = { wicket?:true, runs?:0|1|2|3|4|6 }
+- Game.debug.seed = 12345  // deterministic RNG
+
+Acceptance checklist
+- Single file, opens offline. No console errors. Smooth on mid-range Android.
+- Spacebar/tap stops indicator precisely. Required rate updates correctly.
+- Over changes announce new bowler before next ball.
+- Game Over overlay freezes inputs; “New Match” resets cleanly and keeps difficulty.
+-->
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Cricket Pressure Pro</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            -webkit-tap-highlight-color: transparent;
-        }
-        
-        body {
-            font-family: 'Arial', sans-serif;
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            color: white;
-            overflow: hidden;
-        }
-        
-        .game-container {
-            background: rgba(0, 0, 0, 0.4);
-            border-radius: 20px;
-            padding: 15px;
-            backdrop-filter: blur(10px);
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-            width: 100%;
-            max-width: 900px;
-            display: flex;
-            gap: 15px;
-            height: 100vh;
-            max-height: 100vh;
-        }
-        
-        .left-panel {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            overflow-y: auto;
-        }
-        
-        .right-panel {
-            flex: 1.2;
-            position: relative;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .target-board {
-            background: linear-gradient(135deg, #f59e0b 0%, #dc2626 100%);
-            padding: 12px;
-            border-radius: 10px;
-            text-align: center;
-            font-weight: bold;
-            animation: pulse 2s infinite;
-        }
-        
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.9; }
-        }
-        
-        .target-text {
-            font-size: 16px;
-            margin-bottom: 5px;
-        }
-        
-        .required-rate {
-            font-size: 12px;
-            opacity: 0.9;
-        }
-        
-        .required-rate.high-pressure {
-            color: #fef08a;
-            animation: blink 1s infinite;
-        }
-        
-        @keyframes blink {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.6; }
-        }
-        
-        .score-board {
-            background: rgba(255, 255, 255, 0.1);
-            padding: 10px;
-            border-radius: 10px;
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 8px;
-        }
-        
-        .score-item {
-            text-align: center;
-        }
-        
-        .score-label {
-            font-size: 10px;
-            opacity: 0.7;
-            text-transform: uppercase;
-        }
-        
-        .score-value {
-            font-size: 20px;
-            font-weight: bold;
-            margin-top: 2px;
-        }
-        
-        .player-info {
-            background: rgba(255, 255, 255, 0.1);
-            padding: 10px;
-            border-radius: 10px;
-        }
-        
-        .player-name {
-            font-size: 14px;
-            font-weight: bold;
-            margin-bottom: 6px;
-        }
-        
-        .player-type {
-            font-size: 10px;
-            color: #fbbf24;
-            margin-bottom: 8px;
-        }
-        
-        .player-stats {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 6px;
-            font-size: 11px;
-        }
-        
-        .stat-bar {
-            height: 3px;
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 2px;
-            overflow: hidden;
-            margin-top: 2px;
-        }
-        
-        .stat-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #4ade80, #22c55e);
-            transition: width 0.3s;
-        }
-        
-        .bowler-info {
-            background: rgba(255, 100, 100, 0.1);
-            padding: 10px;
-            border-radius: 10px;
-        }
-        
-        .bowler-type {
-            font-size: 10px;
-            color: #fbbf24;
-            margin-top: 4px;
-        }
-        
-        .cricket-ground {
-            width: 90%;
-            max-width: 350px;
-            aspect-ratio: 1;
-            background: radial-gradient(ellipse at center, #4a7c4e 0%, #2d5016 70%);
-            border-radius: 50%;
-            position: relative;
-            overflow: hidden;
-            box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.5);
-        }
-        
-        .pitch {
-            position: absolute;
-            width: 15%;
-            height: 50%;
-            background: #d4a574;
-            left: 50%;
-            top: 50%;
-            transform: translate(-50%, -50%);
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-        }
-        
-        .wickets {
-            position: absolute;
-            width: 60%;
-            height: 2px;
-            background: white;
-            left: 50%;
-            transform: translateX(-50%);
-        }
-        
-        .wickets.top {
-            top: 15%;
-        }
-        
-        .wickets.bottom {
-            bottom: 15%;
-        }
-        
-        .fielder {
-            position: absolute;
-            width: 18px;
-            height: 18px;
-            background: radial-gradient(circle, #ef4444 0%, #dc2626 100%);
-            border-radius: 50%;
-            border: 2px solid white;
-            transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
-            z-index: 2;
-            font-size: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
-        }
-        
-        .batsman {
-            position: absolute;
-            width: 22px;
-            height: 22px;
-            background: radial-gradient(circle, #3b82f6 0%, #2563eb 100%);
-            border-radius: 50%;
-            border: 2px solid white;
-            bottom: 23%;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 3;
-        }
-        
-        .bowler {
-            position: absolute;
-            width: 22px;
-            height: 22px;
-            background: radial-gradient(circle, #f59e0b 0%, #d97706 100%);
-            border-radius: 50%;
-            border: 2px solid white;
-            top: 18%;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 3;
-        }
-        
-        .ball {
-            position: absolute;
-            width: 8px;
-            height: 8px;
-            background: radial-gradient(circle, #ffffff 0%, #ef4444 100%);
-            border-radius: 50%;
-            box-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
-            z-index: 10;
-            display: none;
-        }
-        
-        .timing-bar {
-            margin: 10px 0;
-            height: 35px;
-            background: rgba(0, 0, 0, 0.3);
-            border-radius: 20px;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .timing-zones {
-            display: flex;
-            height: 100%;
-        }
-        
-        .zone {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 9px;
-            font-weight: bold;
-        }
-        
-        .zone-miss { flex: 1; background: rgba(239, 68, 68, 0.6); }
-        .zone-edge { flex: 1; background: rgba(251, 146, 60, 0.6); }
-        .zone-good { flex: 2; background: rgba(34, 197, 94, 0.6); }
-        .zone-perfect { flex: 1; background: rgba(59, 130, 246, 0.6); }
-        
-        .timing-indicator {
-            position: absolute;
-            width: 4px;
-            height: 100%;
-            background: white;
-            box-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
-            top: 0;
-            left: 0;
-            transition: none;
-        }
-        
-        .shot-controls {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 8px;
-        }
-        
-        .shot-btn {
-            padding: 12px 8px;
-            border: none;
-            border-radius: 8px;
-            font-size: 11px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s;
-            text-transform: uppercase;
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .shot-btn small {
-            display: block;
-            font-size: 9px;
-            opacity: 0.8;
-            margin-top: 2px;
-        }
-        
-        .shot-btn.defensive {
-            background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-            color: white;
-        }
-        
-        .shot-btn.balanced {
-            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-            color: white;
-        }
-        
-        .shot-btn.aggressive {
-            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
-            color: white;
-        }
-        
-        .shot-btn:active {
-            transform: scale(0.95);
-        }
-        
-        .shot-btn.selected {
-            transform: scale(1.05);
-            box-shadow: 0 0 15px rgba(255, 255, 255, 0.3);
-        }
-        
-        .shot-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        
-        .play-button {
-            width: 100%;
-            padding: 14px;
-            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-            border: none;
-            border-radius: 10px;
-            color: white;
-            font-size: 14px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        
-        .play-button:active {
-            transform: scale(0.98);
-        }
-        
-        .commentary {
-            background: rgba(0, 0, 0, 0.3);
-            padding: 8px;
-            border-radius: 8px;
-            font-size: 11px;
-            min-height: 35px;
-            font-style: italic;
-            color: #fbbf24;
-            text-align: center;
-        }
-        
-        .game-over-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.95);
-            display: none;
-            justify-content: center;
-            align-items: center;
-            z-index: 100;
-        }
-        
-        .game-over-content {
-            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-            padding: 30px;
-            border-radius: 20px;
-            text-align: center;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-            max-width: 90%;
-        }
-        
-        .game-over-title {
-            font-size: 28px;
-            margin-bottom: 15px;
-            background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        
-        .final-stats {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 12px;
-            margin: 15px 0;
-        }
-        
-        .stat-card {
-            background: rgba(255, 255, 255, 0.1);
-            padding: 8px;
-            border-radius: 8px;
-        }
-        
-        .stat-label {
-            font-size: 10px;
-            opacity: 0.7;
-        }
-        
-        .stat-value {
-            font-size: 18px;
-            font-weight: bold;
-            color: #fbbf24;
-        }
-        
-        /* Mobile Responsive */
-        @media (max-width: 768px) {
-            .game-container {
-                flex-direction: column;
-                padding: 10px;
-                height: 100vh;
-                max-height: 100vh;
-            }
-            
-            .left-panel {
-                flex: none;
-                overflow-y: visible;
-            }
-            
-            .right-panel {
-                flex: none;
-                height: 300px;
-            }
-            
-            .cricket-ground {
-                width: 250px;
-                max-width: 250px;
-            }
-            
-            .score-board {
-                padding: 8px;
-            }
-            
-            .score-value {
-                font-size: 18px;
-            }
-            
-            .player-info, .bowler-info {
-                padding: 8px;
-            }
-            
-            .shot-controls {
-                position: fixed;
-                bottom: 60px;
-                left: 10px;
-                right: 10px;
-                background: rgba(0, 0, 0, 0.8);
-                padding: 10px;
-                border-radius: 10px;
-                z-index: 50;
-            }
-            
-            .play-button {
-                position: fixed;
-                bottom: 10px;
-                left: 10px;
-                right: 10px;
-                z-index: 50;
-            }
-            
-            .commentary {
-                margin-bottom: 120px;
-            }
-        }
-        
-        .wicket-alert {
-            animation: wicketFall 0.5s ease-in-out 3;
-        }
-        
-        @keyframes wicketFall {
-            0%, 100% { transform: translateX(-50%) scale(1); }
-            50% { transform: translateX(-50%) scale(0.5); background: red; }
-        }
-    </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<title>Cricket Pressure Pro – Efficient v2</title>
+<style>
+  :root{
+    --bg1:#0e1a2b;
+    --bg2:#1f3b73;
+    --card:#ffffff14;
+    --cardBorder:#ffffff26;
+    --text:#eaf2ff;
+    --muted:#a8b3c7;
+    --accent:#8fd0ff;
+    --good:#28c76f;
+    --edge:#f7b500;
+    --out:#ff4d4f;
+    --great:#00d0ff;
+    --shadow:0 10px 30px rgba(0,0,0,0.25);
+    --glass:backdrop-filter: blur(10px);
+    --radius:16px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial;
+    color:var(--text);
+    background: radial-gradient(100% 120% at 0% 0%, #163057 0%, var(--bg2) 60%) fixed,
+                linear-gradient(135deg, var(--bg1), var(--bg2)) fixed;
+    overflow:hidden;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .app{
+    display:grid;
+    grid-template-rows:auto 1fr auto;
+    gap:10px;
+    height:100%;
+    padding:14px;
+  }
+  .row{
+    display:grid;
+    gap:10px;
+  }
+  .score{
+    display:grid;
+    grid-template-columns:1fr;
+    gap:10px;
+  }
+  .card{
+    background:var(--card);
+    border:1px solid var(--cardBorder);
+    border-radius:var(--radius);
+    box-shadow:var(--shadow);
+    padding:12px;
+    /* glass */
+    backdrop-filter: blur(10px);
+  }
+  .scoregrid{
+    display:grid;
+    grid-template-columns: repeat(6, minmax(0,1fr));
+    gap:8px;
+  }
+  .kv{
+    background:#ffffff0a;
+    border:1px solid #ffffff1c;
+    border-radius:12px;
+    padding:8px;
+    text-align:center;
+  }
+  .kv b{display:block; font-size:12px; color:var(--muted); letter-spacing:.3px;}
+  .kv span{display:block; font-size:18px; margin-top:4px}
+
+  .bowler{
+    display:flex;align-items:center;gap:10px;justify-content:space-between;
+    font-size:14px;color:var(--muted)
+  }
+  .bowler strong{color:var(--text)}
+  .controls{
+    display:grid; gap:10px;
+    grid-template-columns: 1fr;
+  }
+  .shots{display:flex; gap:8px; justify-content:space-between}
+  .btn{
+    flex:1;
+    border:none;
+    border-radius:12px;
+    padding:12px 10px;
+    color:#0b1a2a;
+    background:#d9f0ff;
+    font-weight:700;
+    cursor:pointer;
+    box-shadow:var(--shadow);
+    transition: transform .06s ease, filter .2s ease, opacity .2s ease;
+  }
+  .btn[data-variant="def"]{background:#e6ffe9}
+  .btn[data-variant="bal"]{background:#fff4d6}
+  .btn[data-variant="agg"]{background:#ffdce1}
+  .btn[aria-pressed="true"]{outline:2px solid var(--accent)}
+  .btn:active{transform:scale(.97)}
+  .btn[disabled]{opacity:.5; cursor:not-allowed}
+  .playbar{
+    display:grid; gap:10px;
+  }
+  .timingWrap{
+    position:relative; height:42px; border-radius:16px; overflow:hidden;
+    border:1px solid #ffffff2a; background:#0b1a2a99;
+  }
+  .zones{position:absolute; inset:0; display:flex;}
+  .zones div{
+    height:100%;
+  }
+  .z-out{background:linear-gradient(90deg,#4b0e13,#7a1620)}
+  .z-edge{background:linear-gradient(90deg,#7a5b00,#a67800)}
+  .z-good{background:linear-gradient(90deg,#0e6b3f,#189e5b)}
+  .z-great{background:linear-gradient(90deg,#0a718b,#0bbad6)}
+  .indicator{
+    position:absolute; top:2px; bottom:2px; width:8px; border-radius:6px;
+    background:#fff; box-shadow:0 0 0 2px rgba(255,255,255,.25),0 0 12px #fff;
+    transform:translateX(0);
+    will-change:transform;
+  }
+  .flash{
+    position:absolute; inset:0; pointer-events:none; opacity:0;
+  }
+  .flash.show{animation:flash .45s ease}
+  @keyframes flash{
+    0%{opacity:0}
+    15%{opacity:.8}
+    100%{opacity:0}
+  }
+  .playrow{
+    display:flex; gap:10px; align-items:center;
+  }
+  .playrow .btn-main{
+    flex:1; background:linear-gradient(135deg,#9bd2ff,#72c4ff);
+    color:#0c2032; font-size:16px;
+  }
+  .diff{
+    display:flex; align-items:center; gap:10px; color:var(--muted); font-size:12px
+  }
+  .diff input{width:100%}
+  .field{
+    position:relative;
+    aspect-ratio:1/1;
+    border-radius:20px;
+    overflow:hidden;
+    border:1px solid #ffffff1e;
+    background:
+      radial-gradient(45% 45% at 50% 50%, #1a7d3a 0%, #10622c 60%, #0a4e22 100%),
+      conic-gradient(from 0deg, #ffffff08, #00000000);
+    box-shadow:inset 0 0 60px rgba(0,0,0,.4);
+  }
+  .pitch{
+    position:absolute; left:50%; top:55%; width:3px; height:120px;
+    transform:translate(-50%,-50%); background:#cda; border-radius:2px; opacity:.9;
+  }
+  .ball{
+    position:absolute; width:10px; height:10px; border-radius:50%;
+    background:#ff4d4f; box-shadow:0 0 8px rgba(255,0,0,.6);
+    transform:translate(-50%,-50%); display:none; will-change:transform;
+  }
+  .fielder{
+    position:absolute; width:12px; height:12px; border-radius:50%;
+    background:#eaeff7; box-shadow:0 0 0 2px #0b1a2a;
+    transform:translate(-50%,-50%); will-change:transform;
+  }
+  .comms{
+    height:100%; overflow:auto; padding-right:4px;
+    scrollbar-width:thin;
+  }
+  .comms p{margin:.2rem 0; font-size:13px; color:var(--muted)}
+  .comms p.strong{color:#fff}
+  .toast{
+    position:fixed; left:50%; bottom:20px; transform:translateX(-50%);
+    padding:10px 14px; border-radius:12px; background:#000000cc; color:#fff;
+    font-weight:700; box-shadow:var(--shadow); opacity:0; pointer-events:none;
+  }
+  .toast.show{animation:toast 1.8s ease both}
+  @keyframes toast{
+    0%{opacity:0; transform:translate(-50%,10px)}
+    10%{opacity:1; transform:translate(-50%,0)}
+    80%{opacity:1}
+    100%{opacity:0; transform:translate(-50%,6px)}
+  }
+  .overlay{
+    position:fixed; inset:0; display:none; align-items:center; justify-content:center;
+    background:rgba(0,0,0,.6);
+  }
+  .overlay .panel{
+    background:var(--card); border:1px solid var(--cardBorder);
+    border-radius:16px; padding:18px; width:min(520px,92vw);
+    text-align:center;
+    backdrop-filter: blur(10px);
+  }
+  .overlay .panel h2{margin:.2rem 0 .6rem 0}
+  .overlay .panel p{margin:.2rem 0 .6rem 0; color:var(--muted)}
+  .overlay .panel .btn{width:100%}
+  .footer{
+    display:flex; gap:10px; align-items:center; justify-content:space-between;
+    color:var(--muted); font-size:12px;
+  }
+  @media (min-width:860px){
+    .app{grid-template-rows:auto 1fr auto; padding:18px}
+    .row{grid-template-columns: 1.2fr .8fr}
+    .controls{grid-template-columns: 1fr}
+    .score{grid-template-columns:1fr}
+  }
+  @media (prefers-reduced-motion: reduce){
+    *{scroll-behavior:auto; animation:none !important; transition:none !important}
+  }
+</style>
 </head>
 <body>
-    <div class="game-container">
-        <div class="left-panel">
-            <div class="target-board">
-                <div class="target-text">TARGET: <span id="target">180</span></div>
-                <div>Need <span id="needed">180</span> runs in <span id="ballsLeft">120</span> balls</div>
-                <div class="required-rate" id="requiredRate">Required Rate: 9.00</div>
-            </div>
-            
-            <div class="score-board">
-                <div class="score-item">
-                    <div class="score-label">Score</div>
-                    <div class="score-value" id="score">0</div>
-                </div>
-                <div class="score-item">
-                    <div class="score-label">Wickets</div>
-                    <div class="score-value" id="wickets">0</div>
-                </div>
-                <div class="score-item">
-                    <div class="score-label">Overs</div>
-                    <div class="score-value" id="overs">0.0</div>
-                </div>
-            </div>
-            
-            <div class="player-info">
-                <div class="player-name" id="batsmanName">Loading...</div>
-                <div class="player-type" id="batsmanType">Opener</div>
-                <div class="player-stats">
-                    <div>
-                        <span>Power</span>
-                        <div class="stat-bar">
-                            <div class="stat-fill" id="powerBar" style="width: 0%"></div>
-                        </div>
-                    </div>
-                    <div>
-                        <span>Timing</span>
-                        <div class="stat-bar">
-                            <div class="stat-fill" id="timingBar" style="width: 0%"></div>
-                        </div>
-                    </div>
-                    <div>
-                        <span>Risk Mgmt</span>
-                        <div class="stat-bar">
-                            <div class="stat-fill" id="riskBar" style="width: 0%"></div>
-                        </div>
-                    </div>
-                    <div>
-                        <span>Confidence</span>
-                        <div class="stat-bar">
-                            <div class="stat-fill" id="confidenceBar" style="width: 50%"></div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="bowler-info">
-                <div class="player-name" id="bowlerName">Loading...</div>
-                <div class="bowler-type" id="bowlerType">Fast</div>
-            </div>
-            
-            <div class="timing-bar">
-                <div class="timing-zones">
-                    <div class="zone zone-miss">OUT</div>
-                    <div class="zone zone-edge">EDGE</div>
-                    <div class="zone zone-good">GOOD</div>
-                    <div class="zone zone-perfect">GREAT</div>
-                </div>
-                <div class="timing-indicator" id="timingIndicator"></div>
-            </div>
-            
-            <div class="shot-controls">
-                <button class="shot-btn defensive" onclick="selectShot('defensive')">
-                    Defend<br><small>Low Risk</small>
-                </button>
-                <button class="shot-btn balanced selected" onclick="selectShot('balanced')">
-                    Normal<br><small>Medium</small>
-                </button>
-                <button class="shot-btn aggressive" onclick="selectShot('aggressive')">
-                    Attack<br><small>High Risk</small>
-                </button>
-            </div>
-            
-            <button class="play-button" id="playBtn" onclick="bowl()">FACE DELIVERY</button>
-            
-            <div class="commentary" id="commentary">Win the match by chasing the target!</div>
+  <div class="app" id="app" aria-label="Cricket Pressure Pro game">
+    <div class="row">
+      <section class="score card" aria-label="Scoreboard">
+        <div class="scoregrid">
+          <div class="kv"><b>Target</b><span id="target">—</span></div>
+          <div class="kv"><b>Score</b><span id="score">0</span></div>
+          <div class="kv"><b>Wickets</b><span id="wkts">0</span></div>
+          <div class="kv"><b>Overs</b><span id="overs">0.0</span></div>
+          <div class="kv"><b>Balls Left</b><span id="ballsleft">120</span></div>
+          <div class="kv"><b>Req. Rate</b><span id="rrr">—</span></div>
         </div>
-        
-        <div class="right-panel">
-            <div class="cricket-ground" id="cricketGround">
-                <div class="pitch">
-                    <div class="wickets top"></div>
-                    <div class="wickets bottom"></div>
-                </div>
-                <div class="batsman" id="batsman"></div>
-                <div class="bowler" id="bowler"></div>
-                <div class="ball" id="ball"></div>
-            </div>
+        <div class="bowler" aria-live="polite" id="bowlerLine">
+          <div>Striker: <strong id="strikerName">—</strong> • Non-striker: <strong id="nonStrikerName">—</strong></div>
+          <div>Bowler: <strong id="bowlerName">—</strong> <span id="bowlerType" style="opacity:.8"></span></div>
         </div>
+      </section>
+      <section class="card controls" aria-label="Controls & Timing">
+        <div class="shots" role="group" aria-label="Shot selection">
+          <button class="btn" id="shotDef" data-variant="def" aria-pressed="false" aria-label="Defensive shot (1)">Defend</button>
+          <button class="btn" id="shotBal" data-variant="bal" aria-pressed="true" aria-label="Normal shot (2)">Normal</button>
+          <button class="btn" id="shotAgg" data-variant="agg" aria-pressed="false" aria-label="Aggressive shot (3)">Attack</button>
+        </div>
+        <div class="playbar" aria-label="Timing bar">
+          <div class="timingWrap" id="timingWrap">
+            <div class="zones" id="zones">
+              <div class="z-out"  id="z1" style="width:20%"></div>
+              <div class="z-edge" id="z2" style="width:15%"></div>
+              <div class="z-good" id="z3" style="width:35%"></div>
+              <div class="z-great" id="z4" style="width:30%"></div>
+            </div>
+            <div class="indicator" id="indicator" aria-hidden="true"></div>
+            <div class="flash" id="flash"></div>
+          </div>
+          <div class="playrow">
+            <button class="btn btn-main" id="btnBowl" aria-label="Face Delivery (start ball)">Face Delivery</button>
+          </div>
+          <div class="diff" aria-label="Difficulty">
+            <span>Difficulty</span>
+            <input id="difficulty" type="range" min="0.8" max="1.4" step="0.05" />
+            <span id="diffVal">1.0</span>
+          </div>
+        </div>
+      </section>
     </div>
-    
-    <div class="game-over-overlay" id="gameOverOverlay">
-        <div class="game-over-content">
-            <h2 class="game-over-title" id="gameOverTitle">MATCH COMPLETE!</h2>
-            <div class="final-stats">
-                <div class="stat-card">
-                    <div class="stat-label">Final Score</div>
-                    <div class="stat-value" id="finalScore">0/0</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Result</div>
-                    <div class="stat-value" id="matchResult">-</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Strike Rate</div>
-                    <div class="stat-value" id="strikeRate">0.00</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">Boundaries</div>
-                    <div class="stat-value" id="boundaries">0</div>
-                </div>
-            </div>
-            <button class="play-button" onclick="resetGame()">NEW MATCH</button>
-        </div>
+
+    <div class="row">
+      <section class="card field" id="field" aria-label="Field of play">
+        <div class="pitch"></div>
+        <div class="ball" id="ball"></div>
+        <!-- fielders injected here -->
+      </section>
+      <section class="card comms" id="comms" aria-label="Commentary (live)">
+        <!-- commentary lines -->
+      </section>
     </div>
-    
-    <script>
-        // Game State
-        let gameState = {
-            score: 0,
-            wickets: 0,
-            balls: 0,
-            target: 0,
-            currentBatsman: 0,
-            currentBowler: 0,
-            selectedShot: 'balanced',
-            isPlaying: false,
-            confidence: 50,
-            boundaries: 0,
-            difficulty: 1
-        };
-        
-        // Batting Lineup - More realistic skill distribution
-        const battingLineup = [
-            { name: "R. Sharma", type: "Opener", power: 85, timing: 90, riskManagement: 75 },
-            { name: "S. Gill", type: "Opener", power: 80, timing: 85, riskManagement: 70 },
-            { name: "V. Kohli", type: "Top Order", power: 75, timing: 95, riskManagement: 85 },
-            { name: "S. Iyer", type: "Middle Order", power: 70, timing: 80, riskManagement: 75 },
-            { name: "H. Pandya", type: "All-rounder", power: 85, timing: 70, riskManagement: 60 },
-            { name: "R. Jadeja", type: "All-rounder", power: 65, timing: 75, riskManagement: 70 },
-            { name: "MS. Dhoni", type: "Wicket-keeper", power: 75, timing: 85, riskManagement: 80 },
-            { name: "R. Ashwin", type: "Bowler", power: 40, timing: 55, riskManagement: 50 },
-            { name: "M. Shami", type: "Bowler", power: 30, timing: 45, riskManagement: 40 },
-            { name: "J. Bumrah", type: "Bowler", power: 25, timing: 40, riskManagement: 35 },
-            { name: "Y. Chahal", type: "Bowler", power: 20, timing: 35, riskManagement: 30 }
-        ];
-        
-        // Bowling Attack
-        const bowlingAttack = [
-            { name: "M. Starc", type: "Fast", speed: 95, accuracy: 80 },
-            { name: "P. Cummins", type: "Fast", speed: 90, accuracy: 85 },
-            { name: "N. Lyon", type: "Spin", speed: 50, accuracy: 90 },
-            { name: "A. Zampa", type: "Spin", speed: 55, accuracy: 85 },
-            { name: "J. Hazlewood", type: "Medium", speed: 80, accuracy: 90 }
-        ];
-        
-        // Original field positions for reset
-        const fieldPositions = [
-            { id: '1', x: 55, y: 65, originalX: 55, originalY: 65 },
-            { id: '2', x: 75, y: 50, originalX: 75, originalY: 50 },
-            { id: '3', x: 70, y: 35, originalX: 70, originalY: 35 },
-            { id: '4', x: 50, y: 25, originalX: 50, originalY: 25 },
-            { id: '5', x: 30, y: 25, originalX: 30, originalY: 25 },
-            { id: '6', x: 25, y: 50, originalX: 25, originalY: 50 },
-            { id: '7', x: 35, y: 70, originalX: 35, originalY: 70 },
-            { id: '8', x: 50, y: 10, originalX: 50, originalY: 10 },
-            { id: '9', x: 50, y: 85, originalX: 50, originalY: 85 }
-        ];
-        
-        // Initialize Game
-        function initGame() {
-            // Set random target between 150-220
-            gameState.target = 150 + Math.floor(Math.random() * 71);
-            document.getElementById('target').textContent = gameState.target;
-            document.getElementById('needed').textContent = gameState.target;
-            
-            updateBatsmanDisplay();
-            selectBowler();
-            placeFielders();
-            updateScoreboard();
-            updateRequiredRate();
-        }
-        
-        function updateBatsmanDisplay() {
-            const batsman = battingLineup[gameState.currentBatsman];
-            document.getElementById('batsmanName').textContent = batsman.name;
-            document.getElementById('batsmanType').textContent = batsman.type;
-            document.getElementById('powerBar').style.width = batsman.power + '%';
-            document.getElementById('timingBar').style.width = batsman.timing + '%';
-            document.getElementById('riskBar').style.width = batsman.riskManagement + '%';
-            document.getElementById('confidenceBar').style.width = gameState.confidence + '%';
-        }
-        
-        function selectBowler() {
-            if (gameState.balls % 6 === 0 && gameState.balls > 0) {
-                gameState.currentBowler = (gameState.currentBowler + 1) % bowlingAttack.length;
-            }
-            const bowler = bowlingAttack[gameState.currentBowler];
-            document.getElementById('bowlerName').textContent = bowler.name;
-            document.getElementById('bowlerType').textContent = bowler.type + ' Bowler';
-        }
-        
-        function placeFielders() {
-            document.querySelectorAll('.fielder').forEach(f => f.remove());
-            
-            const ground = document.getElementById('cricketGround');
-            fieldPositions.forEach((pos, index) => {
-                const fielder = document.createElement('div');
-                fielder.className = 'fielder';
-                fielder.id = 'fielder-' + pos.id;
-                fielder.style.left = pos.x + '%';
-                fielder.style.top = pos.y + '%';
-                fielder.textContent = pos.id;
-                ground.appendChild(fielder);
-            });
-        }
-        
-        function resetFielders() {
-            fieldPositions.forEach(pos => {
-                const fielder = document.getElementById('fielder-' + pos.id);
-                if (fielder) {
-                    fielder.style.left = pos.originalX + '%';
-                    fielder.style.top = pos.originalY + '%';
-                }
-            });
-        }
-        
-        function selectShot(type) {
-            gameState.selectedShot = type;
-            document.querySelectorAll('.shot-btn').forEach(btn => {
-                btn.classList.remove('selected');
-            });
-            event.target.classList.add('selected');
-        }
-        
-        function bowl() {
-            if (gameState.isPlaying) return;
-            
-            gameState.isPlaying = true;
-            document.getElementById('playBtn').disabled = true;
-            document.querySelectorAll('.shot-btn').forEach(btn => btn.disabled = true);
-            
-            // Reset fielders to original positions
-            resetFielders();
-            
-            const indicator = document.getElementById('timingIndicator');
-            indicator.style.transition = 'none';
-            indicator.style.left = '0%';
-            
-            const bowler = bowlingAttack[gameState.currentBowler];
-            const speed = 1500 + (100 - bowler.speed) * 20;
-            
-            setTimeout(() => {
-                indicator.style.transition = `left ${speed}ms linear`;
-                indicator.style.left = '100%';
-            }, 10);
-            
-            const stopTime = 200 + Math.random() * (speed - 400);
-            
-            setTimeout(() => {
-                playShot();
-            }, stopTime);
-        }
-        
-        function playShot() {
-            const indicator = document.getElementById('timingIndicator');
-            const rect = indicator.getBoundingClientRect();
-            const containerRect = indicator.parentElement.getBoundingClientRect();
-            const position = ((rect.left - containerRect.left) / containerRect.width) * 100;
-            
-            indicator.style.transition = 'none';
-            indicator.style.left = position + '%';
-            
-            const result = calculateShotResult(position);
-            animateShot(result);
-            updateGameState(result);
-            
-            setTimeout(() => {
-                gameState.isPlaying = false;
-                document.getElementById('playBtn').disabled = false;
-                document.querySelectorAll('.shot-btn').forEach(btn => btn.disabled = false);
-            }, 1500);
-        }
-        
-        function calculateShotResult(timingPosition) {
-            const batsman = battingLineup[gameState.currentBatsman];
-            const bowler = bowlingAttack[gameState.currentBowler];
-            
-            let result = { runs: 0, wicket: false, description: '' };
-            
-            // Timing zones
-            let timingQuality;
-            if (timingPosition < 20) {
-                timingQuality = 'miss';
-            } else if (timingPosition < 35) {
-                timingQuality = 'edge';
-            } else if (timingPosition < 70) {
-                timingQuality = 'good';
-            } else {
-                timingQuality = 'perfect';
-            }
-            
-            // REALISTIC RISK CALCULATION
-            const shotRisk = {
-                defensive: 0.05,
-                balanced: 0.15,
-                aggressive: 0.35
-            }[gameState.selectedShot];
-            
-            // Tail-enders have MUCH higher failure rate with aggressive shots
-            const riskMultiplier = (100 - batsman.riskManagement) / 100;
-            const skillPenalty = batsman.timing < 60 ? 2.5 : 1; // Heavy penalty for tail-enders
-            
-            // Calculate wicket probability
-            let wicketChance = shotRisk * riskMultiplier * skillPenalty;
-            
-            // Aggressive shots by tail-enders (timing < 50) almost always fail
-            if (gameState.selectedShot === 'aggressive' && batsman.timing < 50) {
-                wicketChance = 0.7; // 70% chance of getting out
-            }
-            
-            // Timing affects wicket chance
-            if (timingQuality === 'miss') {
-                wicketChance = 0.9;
-            } else if (timingQuality === 'edge') {
-                wicketChance += 0.3;
-            }
-            
-            // Check for wicket
-            if (Math.random() < wicketChance) {
-                result.wicket = true;
-                result.description = ['Bowled!', 'Caught!', 'LBW!', 'Edge to keeper!'][Math.floor(Math.random() * 4)];
-            } else {
-                // Calculate runs - tail-enders struggle to score
-                const powerFactor = batsman.power / 100;
-                const timingFactor = batsman.timing / 100;
-                const confidenceFactor = gameState.confidence / 100;
-                
-                let baseRuns = 0;
-                const shotMultiplier = {
-                    defensive: 0.3,
-                    balanced: 1,
-                    aggressive: 1.8
-                }[gameState.selectedShot];
-                
-                switch(timingQuality) {
-                    case 'edge':
-                        baseRuns = Math.random() < 0.7 ? 0 : 1;
-                        result.description = 'Edged! ';
-                        break;
-                    case 'good':
-                        if (batsman.power < 40 && gameState.selectedShot === 'aggressive') {
-                            // Tail-enders can't hit big even with good timing on aggressive shots
-                            baseRuns = Math.random() < 0.8 ? 0 : 1;
-                        } else {
-                            baseRuns = Math.floor(Math.random() * 3) + 1;
-                            if (Math.random() < powerFactor * shotMultiplier * 0.2) {
-                                baseRuns = 4;
-                            }
-                        }
-                        break;
-                    case 'perfect':
-                        if (batsman.power < 40) {
-                            // Tail-enders max out at 2-3 runs even with perfect timing
-                            baseRuns = Math.floor(Math.random() * 2) + 1;
-                        } else {
-                            baseRuns = Math.floor(Math.random() * 2) + 2;
-                            if (Math.random() < powerFactor * shotMultiplier * 0.4) {
-                                baseRuns = Math.random() < 0.6 ? 4 : 6;
-                            }
-                        }
-                        break;
-                }
-                
-                // Final run calculation with skill factors
-                result.runs = Math.floor(baseRuns * (0.3 + timingFactor * 0.7));
-                
-                // Format description
-                if (result.runs === 4) {
-                    result.description = 'FOUR!';
-                    gameState.boundaries++;
-                } else if (result.runs === 6) {
-                    result.description = 'SIX!';
-                    gameState.boundaries++;
-                } else if (result.runs === 0) {
-                    result.description = 'Dot ball';
-                } else {
-                    result.description = result.runs + ' run' + (result.runs > 1 ? 's' : '');
-                }
-            }
-            
-            return result;
-        }
-        
-        function animateShot(result) {
-            const ball = document.getElementById('ball');
-            
-            ball.style.display = 'block';
-            ball.style.left = '50%';
-            ball.style.bottom = '23%';
-            
-            if (!result.wicket && result.runs > 0) {
-                const angle = Math.random() * Math.PI;
-                const distance = result.runs >= 4 ? 35 : 15 + Math.random() * 15;
-                const endX = 50 + Math.cos(angle) * distance;
-                const endY = 77 - Math.sin(angle) * distance;
-                
-                ball.style.transition = 'all 0.8s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
-                setTimeout(() => {
-                    ball.style.left = endX + '%';
-                    ball.style.bottom = endY + '%';
-                }, 10);
-                
-                if (result.runs < 4) {
-                    let closestDist = Infinity;
-                    let closestFielder = null;
-                    
-                    fieldPositions.forEach(field => {
-                        const dist = Math.sqrt(Math.pow(field.x - endX, 2) + Math.pow(field.y - (100 - endY), 2));
-                        if (dist < closestDist) {
-                            closestDist = dist;
-                            closestFielder = field;
-                        }
-                    });
-                    
-                    if (closestFielder) {
-                        const fielderEl = document.getElementById('fielder-' + closestFielder.id);
-                        setTimeout(() => {
-                            fielderEl.style.left = endX + '%';
-                            fielderEl.style.top = (100 - endY) + '%';
-                        }, 200);
-                    }
-                }
-            } else if (result.wicket) {
-                document.getElementById('batsman').classList.add('wicket-alert');
-                setTimeout(() => {
-                    document.getElementById('batsman').classList.remove('wicket-alert');
-                }, 1500);
-            }
-            
-            setTimeout(() => {
-                ball.style.display = 'none';
-                ball.style.transition = 'none';
-            }, 1500);
-        }
-        
-        function updateGameState(result) {
-            gameState.balls++;
-            
-            if (result.wicket) {
-                gameState.wickets++;
-                gameState.currentBatsman++;
-                gameState.confidence = 50;
-                
-                if (gameState.wickets >= 10) {
-                    endGame();
-                    return;
-                }
-                
-                updateBatsmanDisplay();
-            } else {
-                gameState.score += result.runs;
-                
-                if (result.runs > 0) {
-                    gameState.confidence = Math.min(100, gameState.confidence + result.runs * 3);
-                } else {
-                    gameState.confidence = Math.max(20, gameState.confidence - 5);
-                }
-            }
-            
-            updateScoreboard();
-            updateCommentary(result);
-            updateRequiredRate();
-            selectBowler();
-            
-            // Check win condition
-            if (gameState.score >= gameState.target) {
-                endGame();
-            } else if (gameState.balls >= 120) {
-                endGame();
-            }
-        }
-        
-        function updateScoreboard() {
-            document.getElementById('score').textContent = gameState.score;
-            document.getElementById('wickets').textContent = gameState.wickets;
-            const overs = Math.floor(gameState.balls / 6) + '.' + (gameState.balls % 6);
-            document.getElementById('overs').textContent = overs;
-            document.getElementById('confidenceBar').style.width = gameState.confidence + '%';
-            
-            const needed = Math.max(0, gameState.target - gameState.score);
-            const ballsLeft = Math.max(0, 120 - gameState.balls);
-            document.getElementById('needed').textContent = needed;
-            document.getElementById('ballsLeft').textContent = ballsLeft;
-        }
-        
-        function updateRequiredRate() {
-            const needed = gameState.target - gameState.score;
-            const ballsLeft = 120 - gameState.balls;
-            
-            if (ballsLeft > 0) {
-                const reqRate = (needed / ballsLeft * 6).toFixed(2);
-                const rateElement = document.getElementById('requiredRate');
-                rateElement.textContent = 'Required Rate: ' + reqRate;
-                
-                if (reqRate > 12) {
-                    rateElement.classList.add('high-pressure');
-                } else {
-                    rateElement.classList.remove('high-pressure');
-                }
-            }
-        }
-        
-        function updateCommentary(result) {
-            const commentary = document.getElementById('commentary');
-            const batsman = battingLineup[gameState.currentBatsman];
-            const bowler = bowlingAttack[gameState.currentBowler];
-            
-            let text = bowler.name + ' to ' + batsman.name + ' - ' + result.description;
-            
-            if (result.wicket) {
-                text = '🔥 WICKET! ' + text;
-            } else if (result.runs >= 4) {
-                text = '⭐ ' + text;
-            }
-            
-            commentary.textContent = text;
-        }
-        
-        function endGame() {
-            const overlay = document.getElementById('gameOverOverlay');
-            overlay.style.display = 'flex';
-            
-            const won = gameState.score >= gameState.target;
-            const strikeRate = gameState.balls > 0 ? ((gameState.score / gameState.balls) * 100).toFixed(2) : 0;
-            
-            document.getElementById('finalScore').textContent = gameState.score + '/' + gameState.wickets;
-            document.getElementById('strikeRate').textContent = strikeRate;
-            document.getElementById('boundaries').textContent = gameState.boundaries;
-            
-            if (won) {
-                document.getElementById('gameOverTitle').textContent = 'VICTORY!';
-                const wicketsLeft = 10 - gameState.wickets;
-                const ballsLeft = 120 - gameState.balls;
-                document.getElementById('matchResult').textContent = 'Won by ' + wicketsLeft + ' wkts';
-            } else if (gameState.wickets === 10) {
-                document.getElementById('gameOverTitle').textContent = 'ALL OUT!';
-                const runsShort = gameState.target - gameState.score;
-                document.getElementById('matchResult').textContent = 'Lost by ' + runsShort + ' runs';
-            } else {
-                document.getElementById('gameOverTitle').textContent = 'TIME UP!';
-                const runsShort = gameState.target - gameState.score;
-                document.getElementById('matchResult').textContent = 'Lost by ' + runsShort + ' runs';
-            }
-        }
-        
-        function resetGame() {
-            gameState = {
-                score: 0,
-                wickets: 0,
-                balls: 0,
-                target: 0,
-                currentBatsman: 0,
-                currentBowler: 0,
-                selectedShot: 'balanced',
-                isPlaying: false,
-                confidence: 50,
-                boundaries: 0,
-                difficulty: 1
-            };
-            
-            document.getElementById('gameOverOverlay').style.display = 'none';
-            document.getElementById('commentary').textContent = 'Win the match by chasing the target!';
-            
-            // Reset shot selection
-            document.querySelectorAll('.shot-btn').forEach(btn => {
-                btn.classList.remove('selected');
-            });
-            document.querySelector('.shot-btn.balanced').classList.add('selected');
-            
-            initGame();
-        }
-        
-        // Start the game
-        initGame();
-    </script>
+
+    <div class="footer">
+      <div>Cricket Pressure Pro · v2</div>
+      <div>Tip: Spacebar stops the indicator. Keys 1/2/3 switch shots.</div>
+    </div>
+
+    <div class="toast" id="toast">Toast</div>
+
+    <div class="overlay" id="overlay" aria-modal="true" role="dialog">
+      <div class="panel">
+        <h2 id="ovrTitle">Game Over</h2>
+        <p id="ovrText">—</p>
+        <button class="btn btn-main" id="btnNew">New Match</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ============================================================
+   Cricket Pressure Pro – Efficient v2
+   Top-to-bottom, single-file, zero-deps, sequential code layout
+   Sections:
+   1) Config & seedable RNG
+   2) State model
+   3) DOM refs
+   4) Init & reset
+   5) Input handlers (keyboard/touch)
+   6) Animation helpers (rAF tweens)
+   7) Probability & outcomes
+   8) Rendering & UI updates
+   9) Game loop hooks
+   10) Boot
+============================================================ */
+const Game = {
+  /* --------------------------- 1) CONFIG & RNG --------------------------- */
+  config:{
+    targetMin:150, targetMax:220,
+    totalBalls:120, ballsPerOver:6,
+    zoneBase:[0.20,0.35,0.70,1.00], // cumulative thresholds (OUT, EDGE, GOOD, GREAT)
+    // Bowler influence: speeds in px/s and zone scaling (multiplies GOOD/GREAT widths; EDGE wider for spin)
+    bowlerType:{
+      FAST:{ speed:900, zoneScale:{good:0.90, great:0.85, edge:1.00} },
+      MED :{ speed:750, zoneScale:{good:1.00, great:1.00, edge:1.00} },
+      SPIN:{ speed:600, zoneScale:{good:1.05, great:1.05, edge:1.15} }
+    },
+    // Difficulty scale (1.0 baseline). >1 => harder: faster indicator, narrower good/great, more wicket risk.
+    difficulty:{
+      speed: (d)=>d,                 // multiply indicator speed
+      zoneGood: (d)=>1 - (d-1)*0.15, // reduce width up to ~15%
+      zoneGreat:(d)=>1 - (d-1)*0.20, // reduce width up to ~20%
+      wicket: (d)=>1 + (d-1)*0.35    // increase wicket risk up to ~35%
+    },
+    // Shot profiles: run weights per zone & base wicket risk multipliers (before batter traits)
+    shots:{
+      DEF:{ name:'Defend',   key:'1', risk:0.5,  runWeights:{EDGE:[0,1], GOOD:[0,1,2], GREAT:[1,2,3]}, boundaryBias:0.05 },
+      BAL:{ name:'Normal',   key:'2', risk:1.0,  runWeights:{EDGE:[0,1], GOOD:[1,2,3], GREAT:[2,3,4]}, boundaryBias:0.25 },
+      AGG:{ name:'Attack',   key:'3', risk:1.6,  runWeights:{EDGE:[0,1], GOOD:[1,2,4], GREAT:[2,4,6]}, boundaryBias:0.55 }
+    },
+    // Tail-enders more vulnerable on aggressive swings:
+    tailAggWicketBoost:1.35, // multiply wicket chance if low power/timing and shot = AGG
+    // Batter attribute influence (0..1 each). Power helps bigger shots; Timing reduces wickets on good timing.
+    influence:{
+      powerToBoundary:0.65,
+      timingToSafety:0.55,
+      riskMgmtToSafety:0.45
+    },
+    // Field
+    batOrigin:{ x:50, y:68 }, // percent in field box
+    fielderCount:10,
+    // Animation durations (ms)
+    anim:{
+      ball: 1000,
+      fielder: 900
+    },
+    // Vibrations
+    vib:{
+      wicket:[30,40,30],
+      boundary:[12,0,12]
+    },
+    // UI/comm
+    maxComms:28
+  },
+  rng:(function(){
+    // Mulberry32 for deterministic small RNG
+    let _seed = Math.floor(Math.random()*2**32)>>>0;
+    function setSeed(s){ _seed = (s>>>0) || 1; }
+    function rnd(){
+      let t = _seed += 0x6D2B79F5;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    }
+    function pick(arr){ return arr[Math.floor(rnd()*arr.length)] }
+    return { setSeed, rnd, pick }
+  })(),
+
+  /* ------------------------------ 2) STATE ------------------------------- */
+  state:{
+    target:0,
+    score:0, wickets:0, balls:0, boundaries:0,
+    strikerIdx:0, nonStrikerIdx:1,
+    batters:[], bowlers:[], bowlIdx:0, currentBowler:null,
+    shot:'BAL',
+    ballInPlay:false,
+    indicator:{ active:false, pos:0, dir:1, speed:700, lastTS:0, zones:[.2,.15,.35,.30] },
+    difficulty:1.0,
+    fielders:[],
+    reduced:false,
+    overJustChanged:false,
+    ended:false
+  },
+
+  /* ------------------------------ 3) DOM REFS ---------------------------- */
+  el:{},
+
+  /* -------------------------- 4) INIT & RESET ---------------------------- */
+  init(){
+    // Cache DOM
+    this.el = {
+      target:$('#target'), score:$('#score'), wkts:$('#wkts'), overs:$('#overs'),
+      ballsleft:$('#ballsleft'), rrr:$('#rrr'),
+      strikerName:$('#strikerName'), nonStrikerName:$('#nonStrikerName'),
+      bowlerName:$('#bowlerName'), bowlerType:$('#bowlerType'),
+      shotDef:$('#shotDef'), shotBal:$('#shotBal'), shotAgg:$('#shotAgg'),
+      btnBowl:$('#btnBowl'), timingWrap:$('#timingWrap'), indicator:$('#indicator'),
+      zonesWrap:$('#zones'), z1:$('#z1'), z2:$('#z2'), z3:$('#z3'), z4:$('#z4'),
+      flash:$('#flash'), diff:$('#difficulty'), diffVal:$('#diffVal'),
+      field:$('#field'), ball:$('#ball'), comms:$('#comms'),
+      toast:$('#toast'), overlay:$('#overlay'), ovrTitle:$('#ovrTitle'), ovrText:$('#ovrText'), btnNew:$('#btnNew'),
+      bowlerLine:$('#bowlerLine')
+    };
+
+    // Reduced motion
+    this.state.reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // Difficulty load
+    const saved = localStorage.getItem('cpp_difficulty');
+    this.state.difficulty = saved ? Number(saved) : 1.0;
+    this.el.diff.value = String(this.state.difficulty);
+    this.el.diffVal.textContent = this.state.difficulty.toFixed(2);
+
+    // Events
+    this.bindInputs();
+
+    // Optional debug seed hook
+    if (this.debug.seed) this.rng.setSeed(this.debug.seed);
+
+    // Build squads & field and start
+    this.resetMatch(true);
+  },
+
+  resetMatch(first=false){
+    const S = this.state, C = this.config;
+    S.ended=false;
+    S.target = Math.floor(C.targetMin + this.rng.rnd()*(C.targetMax-C.targetMin+1));
+    S.score=0; S.wickets=0; S.balls=0; S.boundaries=0; S.ballInPlay=false;
+    S.shot = S.shot || 'BAL';
+    S.overJustChanged = true;
+
+    // Simple squads with varied attributes (0.35..0.9)
+    S.batters = [
+      b('R. Sharma', .82,.78,.65), b('V. Kohli', .78,.86,.70), b('S. Iyer', .74,.76,.62),
+      b('K. Rahul', .72,.80,.60), b('S. Gill', .75,.77,.58), b('H. Pandya', .86,.68,.55),
+      b('R. Jadeja', .70,.70,.66), b('A. Patel', .62,.62,.64), b('M. Shami', .45,.46,.42),
+      b('J. Bumrah', .42,.45,.44), b('M. Siraj', .40,.44,.42)
+    ];
+    // Bowlers rotate each over
+    S.bowlers = [
+      w('M. Starc','FAST'), w('P. Cummins','FAST'), w('A. Zampa','SPIN'),
+      w('M. Marsh','MED'), w('J. Hazlewood','FAST')
+    ];
+    S.bowlIdx = 0;
+    S.currentBowler = S.bowlers[S.bowlIdx];
+
+    // Fielders: fixed percent coords around the circle
+    S.fielders = [
+      {id:0,x:50,y:10}, {id:1,x:16,y:20}, {id:2,x:84,y:22},
+      {id:3,x:10,y:50}, {id:4,x:90,y:48}, {id:5,x:20,y:78},
+      {id:6,x:80,y:78}, {id:7,x:34,y:26}, {id:8,x:66,y:26}, {id:9,x:50,y:88}
+    ];
+
+    // Paint fielders
+    $('.fielder', this.el.field).forEach(n=>n.remove());
+    S.fielders.forEach(f=>{
+      const d=document.createElement('div');
+      d.className='fielder'; d.dataset.id=f.id;
+      d.style.left=f.x+'%'; d.style.top=f.y+'%';
+      this.el.field.appendChild(d);
+      f.el = d;
+    });
+
+    // Indicator start pos
+    this.resetIndicator();
+
+    // UI
+    this.updateShotButtons();
+    this.renderScore();
+    this.pushComm(`Target set: ${S.target}.`, true);
+    this.announceBowler(true);
+
+    if (!first) this.hideOverlay();
+  },
+
+  /* ----------------------- 5) INPUT HANDLERS ----------------------------- */
+  bindInputs(){
+    // Shot buttons
+    this.el.shotDef.addEventListener('click', ()=>this.setShot('DEF'));
+    this.el.shotBal.addEventListener('click', ()=>this.setShot('BAL'));
+    this.el.shotAgg.addEventListener('click', ()=>this.setShot('AGG'));
+
+    // Bowl / start ball
+    this.el.btnBowl.addEventListener('click', ()=>this.startBall());
+
+    // Timing bar click/tap to stop
+    this.el.timingWrap.addEventListener('click', ()=>this.stopIndicatorAndResolve());
+
+    // Difficulty slider
+    this.el.diff.addEventListener('input', (e)=>{
+      const v = Number(e.target.value);
+      this.state.difficulty = v;
+      localStorage.setItem('cpp_difficulty', String(v));
+      this.el.diffVal.textContent = v.toFixed(2);
+    });
+
+    // Keyboard
+    window.addEventListener('keydown', (ev)=>{
+      if (ev.repeat) return;
+      const k = ev.key;
+      if (k==='1') this.setShot('DEF');
+      else if (k==='2') this.setShot('BAL');
+      else if (k==='3') this.setShot('AGG');
+      else if (k===' '){
+        ev.preventDefault();
+        if (this.state.indicator.active) this.stopIndicatorAndResolve();
+      } else if ((k==='Enter'||k==='Return') && !this.state.ballInPlay){
+        this.startBall();
+      }
+    });
+
+    // New match
+    this.el.btnNew.addEventListener('click', ()=>this.resetMatch());
+  },
+
+  setShot(code){
+    if (this.state.ballInPlay) return;
+    this.state.shot = code;
+    this.updateShotButtons();
+  },
+  updateShotButtons(){
+    const s=this.state.shot;
+    this.el.shotDef.setAttribute('aria-pressed', s==='DEF');
+    this.el.shotBal.setAttribute('aria-pressed', s==='BAL');
+    this.el.shotAgg.setAttribute('aria-pressed', s==='AGG');
+  },
+
+  /* -------------------- 6) ANIMATION HELPERS (rAF) ----------------------- */
+  resetIndicator(){
+    const ind = this.state.indicator;
+    ind.pos = 6; // px from left
+    ind.dir = 1;
+    ind.lastTS = 0;
+    ind.active = false;
+    this.placeIndicator();
+  },
+  computeZonesForDelivery(){
+    // Base → adjust by bowler type and difficulty; then renormalize
+    const base = this.config.zoneBase.slice(); // [0.2,0.35,0.7,1]
+    const type = this.config.bowlerType[this.state.currentBowler.type];
+    const d = this.state.difficulty;
+
+    // Convert to widths
+    let widths = [base[0], base[1]-base[0], base[2]-base[1], base[3]-base[2]]; // OUT, EDGE, GOOD, GREAT
+    // Bowler scale
+    widths[2] *= type.zoneScale.good;
+    widths[3] *= type.zoneScale.great;
+    widths[1] *= type.zoneScale.edge;
+    // Difficulty scale
+    widths[2] *= this.config.difficulty.zoneGood(d);
+    widths[3] *= this.config.difficulty.zoneGreat(d);
+
+    // Renormalize to sum=1, keep OUT absorbing residual to avoid negatives
+    const total = widths.reduce((a,b)=>a+b,0);
+    widths = widths.map(w=>Math.max(0.05, w/total)); // clamp min 5% each
+    const sum = widths.reduce((a,b)=>a+b,0);
+    widths = widths.map(w=>w/sum);
+
+    this.state.indicator.zones = widths; // store
+    // Paint widths
+    const pct = widths.map(w=>(w*100).toFixed(2)+'%');
+    this.el.z1.style.width=pct[0];
+    this.el.z2.style.width=pct[1];
+    this.el.z3.style.width=pct[2];
+    this.el.z4.style.width=pct[3];
+  },
+  placeIndicator(){
+    this.el.indicator.style.transform = `translateX(${this.state.indicator.pos}px)`;
+  },
+  startIndicator(){
+    const ind = this.state.indicator;
+    ind.active = true;
+    ind.lastTS = performance.now();
+    const wrapW = this.el.timingWrap.clientWidth;
+    const maxX = wrapW - 8 - 6; // indicator width & margin
+    const baseSpeed = this.config.bowlerType[this.state.currentBowler.type].speed;
+    const speed = baseSpeed * this.config.difficulty.speed(this.state.difficulty);
+    ind.speed = speed;
+
+    const step = (ts)=>{
+      if (!ind.active) return;
+      const dt = (ts - ind.lastTS)/1000;
+      ind.lastTS = ts;
+      ind.pos += ind.dir * speed * dt;
+      if (ind.pos <= 6){ ind.pos = 6; ind.dir = 1; }
+      else if (ind.pos >= maxX){ ind.pos = maxX; ind.dir = -1; }
+      this.placeIndicator();
+      this._raf = requestAnimationFrame(step);
+    };
+    this._raf = requestAnimationFrame(step);
+  },
+  stopIndicatorAndResolve(){
+    if (!this.state.indicator.active) return;
+    this.state.indicator.active = false;
+    cancelAnimationFrame(this._raf);
+    this.resolveDelivery();
+  },
+
+  /* ----------------------- 7) PROBABILITY & OUTCOMES --------------------- */
+  resolveDelivery(){
+    const S=this.state, C=this.config;
+    if (!S.ballInPlay) return;
+
+    // Where did we stop (0..1 across bar)?
+    const wrapW = this.el.timingWrap.clientWidth;
+    const pos = (this.state.indicator.pos - 6) / (wrapW - 8 - 12); // 6px margins
+    const forced = this.debug.forceZone;
+    let zVal = pos;
+    if (forced){
+      if (forced==='miss') zVal=0.05;
+      else if (forced==='edge') zVal=0.28;
+      else if (forced==='good') zVal=0.55;
+      else if (forced==='perfect') zVal=0.92;
+    }
+
+    const zoneIdx = this.whichZone(zVal, S.indicator.zones); // 0=OUT,1=EDGE,2=GOOD,3=GREAT
+    const zoneName = ['OUT','EDGE','GOOD','GREAT'][zoneIdx];
+
+    // Flash feedback color
+    const flashColor = zoneIdx===0?'#ff4d4fAA': zoneIdx===1?'#f7b500AA': zoneIdx===2?'#28c76fAA':'#00d0ffAA';
+    this.flashBar(flashColor);
+
+    // Compute outcome (runs/wicket/boundary)
+    const outcome = this.computeOutcome(zoneIdx, zVal);
+
+    // If test hook overrides
+    if (this.debug.nextOutcome){
+      Object.assign(outcome, this.debug.nextOutcome);
+      this.debug.nextOutcome = null;
+    }
+
+    // Animate ball/field + then apply score
+    this.animatePlay(outcome, zoneName, ()=>{
+      this.applyOutcome(outcome, zoneName);
+      this.endOfBall();
+    });
+  },
+  whichZone(x01, widths){
+    // widths array sums to 1
+    let acc=0;
+    for (let i=0;i<widths.length;i++){
+      acc += widths[i];
+      if (x01 <= acc+1e-9) return i;
+    }
+    return widths.length-1;
+  },
+  computeOutcome(zoneIdx, pos01){
+    const S=this.state, C=this.config;
+    const bat = S.batters[S.strikerIdx];
+    const shot = C.shots[S.shot];
+    const dFactor = C.difficulty.wicket(S.difficulty);
+
+    // Base wicket chance by zone
+    let baseW = [0.95, 0.30, 0.05, 0.01][zoneIdx];
+    // Shot risk scales it
+    baseW *= shot.risk;
+    // Batter traits reduce it
+    const timingHelp = C.influence.timingToSafety * bat.timing * (zoneIdx>=2?1.0:0.6);
+    const riskHelp   = C.influence.riskMgmtToSafety * bat.risk;
+    let wicketProb = Math.max(0.01, baseW * dFactor * (1 - (timingHelp + riskHelp)*0.6));
+
+    // Tail-ender aggressive extra risk
+    const isTail = (S.strikerIdx>=8);
+    if (isTail && S.shot==='AGG') wicketProb *= C.tailAggWicketBoost;
+
+    // In EDGE zone, chance of catch is elevated; GREAT is very low wicket
+    if (zoneIdx===1) wicketProb = Math.min(0.85, wicketProb*1.2);
+    if (zoneIdx===3) wicketProb = Math.max(0.005, wicketProb*0.4);
+
+    // Roll wicket?
+    const r = this.rng.rnd();
+    if (r < wicketProb) return { wicket:true, runs:0, boundary:0, where:'short' };
+
+    // Not out → compute runs
+    // Choose runs via shot run weights and zone
+    let runs=0, boundary=0;
+    const quality = zoneIdx===3 ? 'GREAT' : zoneIdx===2 ? 'GOOD' : 'EDGE';
+    const choices = C.shots[S.shot].runWeights[quality].slice();
+    // Bias by batter power for higher outcomes
+    if (quality!=='EDGE'){
+      const powerBoost = bat.power * C.influence.powerToBoundary;
+      const bias = (S.shot==='AGG'? shot.boundaryBias : shot.boundaryBias*0.7) + powerBoost*0.35;
+      // Promote 4/6 likelihood if present
+      if (choices.includes(6) && this.rng.rnd()<bias) runs=6;
+      else if (choices.includes(4) && this.rng.rnd()<bias*1.2) runs=4;
+      else runs = this.rng.pick(choices);
+    }else{
+      // Edge: mostly 0/1 runs, small 2
+      if (this.rng.rnd()<0.10) runs=2; else runs=(this.rng.rnd()<0.65?1:0);
+    }
+
+    if (runs>=4) boundary=runs;
+    return { wicket:false, runs, boundary, where: runs>=4?'rope':'infield', pos01 };
+  },
+
+  /* -------------------- 8) RENDERING & UI UPDATES ------------------------ */
+  startBall(){
+    if (this.state.ballInPlay || this.state.ended) return;
+    this.state.ballInPlay = true;
+    this.disableInputs(true);
+    if (this.state.overJustChanged){
+      this.announceBowler(false);
+      this.state.overJustChanged=false;
+    }
+    // Compute per-delivery zones and kick indicator
+    this.computeZonesForDelivery();
+    this.startIndicator();
+  },
+  animatePlay(outcome, zoneName, done){
+    const S=this.state, C=this.config;
+    const ball = this.el.ball;
+    ball.style.display='block';
+
+    // From bat origin → landing
+    const origin = pctToPx(this.config.batOrigin, this.el.field);
+    let landing;
+    if (outcome.wicket){
+      landing = { x: origin.x + (this.rng.rnd()*40-20), y: origin.y - (30 + this.rng.rnd()*30) };
+    }else if (outcome.boundary>=6){
+      landing = onCircle(this.el.field, 50, this.rng.rnd()*Math.PI*2, 0.88); // far
+    }else if (outcome.boundary===4){
+      landing = onCircle(this.el.field, 50, this.rng.rnd()*Math.PI*2, 0.82);
+    }else{
+      // infield
+      const ang = (-Math.PI/2) + (this.rng.rnd()*Math.PI/1.5 - Math.PI/3); // mostly straight to off/leg
+      landing = onCircle(this.el.field, 50, ang, 0.55 + this.rng.rnd()*0.15);
+    }
+
+    const dur = this.state.reduced ? 150 : C.anim.ball;
+    // Simple Bezier-ish parabolic tween
+    const start = performance.now();
+    const ctrl = { x:(origin.x+landing.x)/2 + 0, y: Math.min(origin.y,landing.y) - 120 };
+
+    const nearest = outcome.boundary ? null : this.nearestFielder(landing);
+    let fStart, fFrom, fTo;
+    if (nearest){
+      fStart = performance.now()+80;
+      fFrom = pctToPx({x:nearest.x, y:nearest.y}, this.el.field);
+      fTo = landing;
+    }
+
+    const step = (ts)=>{
+      const t = Math.min(1, (ts-start)/dur);
+      const p = easeOutQuad(t);
+      const bx = quadBezier(origin.x, ctrl.x, landing.x, p);
+      const by = quadBezier(origin.y, ctrl.y, landing.y, p);
+      ball.style.transform = `translate(${bx}px, ${by}px)`;
+      if (nearest && ts>fStart){
+        const ft = Math.min(1, (ts - fStart)/(this.state.reduced?120:this.config.anim.fielder));
+        const fp = easeOutCubic(ft);
+        const fx = lerp(fFrom.x, fTo.x, fp);
+        const fy = lerp(fFrom.y, fTo.y, fp);
+        nearest.el.style.transform = `translate(${fx}px, ${fy}px)`;
+      }
+      if (t<1) { requestAnimationFrame(step); }
+      else {
+        if (this.state.reduced){ /* snap */ }
+        // Vibrate feedback
+        if (outcome.wicket) this.vibrate(this.config.vib.wicket);
+        else if (outcome.boundary) this.vibrate(this.config.vib.boundary);
+        done();
+      }
+    };
+    requestAnimationFrame(step);
+  },
+  nearestFielder(pt){
+    let best=null, bd=1e9;
+    for (const f of this.state.fielders){
+      const fx = pctToPx({x:f.x,y:f.y}, this.el.field);
+      const dx = fx.x-pt.x, dy = fx.y-pt.y;
+      const d = dx*dx+dy*dy;
+      if (d<bd){ bd=d; best=f; }
+    }
+    return best;
+  },
+  applyOutcome(outcome, zoneName){
+    const S=this.state, C=this.config;
+    const over = Math.floor(S.balls/C.ballsPerOver), ballInOver = (S.balls % C.ballsPerOver);
+
+    if (outcome.wicket){
+      S.wickets++;
+      this.pushComm(`${this.nameShort(S.batters[S.strikerIdx].name)} OUT! (${zoneName})`);
+      this.toast('WICKET!');
+      if (S.wickets>=10){ /* team all out */ }
+      else {
+        // Next batter in
+        const nextIdx = Math.max(S.strikerIdx, S.nonStrikerIdx) + 1;
+        S.strikerIdx = nextIdx;
+      }
+    }else{
+      S.score += outcome.runs;
+      if (outcome.boundary) { S.boundaries++; this.toast(outcome.boundary===6?'SIX!':'FOUR!'); }
+      // Strike change on odd runs
+      if (outcome.runs % 2 === 1) [S.strikerIdx, S.nonStrikerIdx] = [S.nonStrikerIdx, S.strikerIdx];
+      // Commentary
+      const txt = outcome.boundary ? `${this.nameShort(S.batters[S.strikerIdx].name)} ${outcome.boundary===6?'smokes it for SIX!':'drives for FOUR!'}` :
+                 outcome.runs===0 ? `Dot ball.` : `${outcome.runs} run${outcome.runs>1?'s':''}.`;
+      this.pushComm(txt);
+    }
+    this.renderScore();
+  },
+  endOfBall(){
+    const S=this.state, C=this.config;
+
+    // Ball consumed
+    S.balls++;
+    const endNow = this.checkEnd();
+    // Over end?
+    if (!endNow && (S.balls % C.ballsPerOver === 0)){
+      this.pushComm(`End of over ${Math.floor(S.balls/C.ballsPerOver)}: ${S.score}/${S.wickets}`, true);
+      // Swap strike at over end if odd number of balls? (cricket rules: swap strike)
+      [S.strikerIdx, S.nonStrikerIdx] = [S.nonStrikerIdx, S.strikerIdx];
+      // Rotate bowler
+      S.bowlIdx = (S.bowlIdx+1) % S.bowlers.length;
+      S.currentBowler = S.bowlers[S.bowlIdx];
+      S.overJustChanged = true;
+      this.announceBowler(true);
+    }
+
+    // Reset visuals
+    this.el.ball.style.display='none';
+    // Reset indicator position
+    this.resetIndicator();
+
+    // Allow next ball if match not ended
+    this.state.ballInPlay = false;
+    this.disableInputs(false);
+  },
+  announceBowler(preBall){
+    const s = this.state.currentBowler;
+    const line = `New over: ${s.name} (${s.type})`;
+    if (preBall) this.pushComm(line, true);
+    this.el.bowlerName.textContent = s.name;
+    this.el.bowlerType.textContent = `• ${s.type}`;
+  },
+  checkEnd(){
+    const S=this.state, C=this.config;
+    const runsNeeded = Math.max(0, S.target - S.score);
+    const ballsLeft = C.totalBalls - S.balls;
+    let ended=false, title='', text='';
+    if (runsNeeded===0){
+      ended=true; title='You Win!'; text=`Chased ${S.target} with ${10-S.wickets} wickets in hand and ${ballsLeft} balls left. Boundaries: ${S.boundaries}.`;
+    }else if (S.wickets>=10){
+      ended=true; title='All Out'; text=`Fell short by ${runsNeeded} runs. Final: ${S.score}/${S.wickets} in ${this.oversText(S.balls)}. Boundaries: ${S.boundaries}.`;
+    }else if (S.balls>=C.totalBalls){
+      ended=true;
+      const result = (S.score>=S.target) ? 'Tie/Win' : 'Lost';
+      title = (S.score>=S.target)?'Tied! (or last-ball win)':'Overs Up';
+      const diff = S.score>=S.target?0:(S.target-S.score);
+      text = (diff===0) ? `Scores level at ${S.score}. Boundaries: ${S.boundaries}.` :
+        `Short by ${diff} runs. Final: ${S.score}/${S.wickets}. Boundaries: ${S.boundaries}.`;
+    }
+    if (ended){
+      this.state.ended=true;
+      this.showOverlay(title, text);
+      this.disableInputs(true);
+    }
+    return ended;
+  },
+  renderScore(){
+    const S=this.state, C=this.config;
+    this.el.target.textContent = S.target;
+    this.el.score.textContent  = S.score;
+    this.el.wkts.textContent   = S.wickets;
+    this.el.overs.textContent  = this.oversText(S.balls);
+    this.el.ballsleft.textContent = Math.max(0, C.totalBalls - S.balls);
+
+    // Required run rate
+    const need = Math.max(0, S.target - S.score);
+    const ballsLeft = Math.max(0, C.totalBalls - S.balls);
+    let rrr = '—';
+    if (need<=0) rrr='0.00';
+    else if (ballsLeft>0){
+      const oversLeft = ballsLeft / C.ballsPerOver;
+      rrr = (need / oversLeft).toFixed(2);
+    }else rrr='—';
+    this.el.rrr.textContent = rrr;
+
+    // Names
+    this.el.strikerName.textContent = this.nameShort(S.batters[S.strikerIdx].name);
+    this.el.nonStrikerName.textContent = this.nameShort(S.batters[S.nonStrikerIdx].name);
+  },
+  oversText(balls){
+    const o = Math.floor(balls/6), b = balls%6;
+    return `${o}.${b}`;
+  },
+  flashBar(color){
+    const f=this.el.flash;
+    f.style.background=color;
+    f.classList.remove('show'); // restart anim
+    // force reflow
+    void f.offsetWidth;
+    f.classList.add('show');
+  },
+  toast(msg){
+    const t=this.el.toast;
+    t.textContent = msg;
+    t.classList.remove('show'); void t.offsetWidth; t.classList.add('show');
+  },
+  vibrate(pattern){
+    if (navigator.vibrate) navigator.vibrate(pattern);
+  },
+  disableInputs(dis){
+    this.el.btnBowl.disabled = dis;
+    this.el.shotDef.disabled = dis;
+    this.el.shotBal.disabled = dis;
+    this.el.shotAgg.disabled = dis;
+  },
+  showOverlay(title,text){
+    this.el.ovrTitle.textContent = title;
+    this.el.ovrText.textContent  = text;
+    this.el.overlay.style.display='flex';
+  },
+  hideOverlay(){ this.el.overlay.style.display='none'; },
+
+  /* --------------------------- 9) GAME HELPERS --------------------------- */
+  nameShort(n){
+    // "R. Sharma"
+    const parts = n.split(' ');
+    if (parts.length>=2) return parts[0][0]+'. '+parts.slice(1).join(' ');
+    return n;
+  },
+  pushComm(text,strong=false){
+    const p = document.createElement('p');
+    if (strong) p.className='strong';
+    p.textContent = text;
+    this.el.comms.appendChild(p);
+    // Trim
+    const nodes = this.el.comms.querySelectorAll('p');
+    if (nodes.length>this.config.maxComms) nodes[0].remove();
+    // Scroll
+    this.el.comms.scrollTop = this.el.comms.scrollHeight;
+  },
+
+  /* ------------------------------ DEBUG HOOKS ---------------------------- */
+  debug:{
+    forceZone:null, // 'perfect'|'good'|'edge'|'miss'|null
+    nextOutcome:null, // { wicket?:true, runs?:0|1|2|3|4|6 }
+    seed:null // e.g., 12345
+  }
+};
+
+/* ----------------------------- SMALL HELPERS ----------------------------- */
+function $(sel, root=document){ const n=root.querySelector(sel); return n }
+function $$(sel, root=document){ return Array.from(root.querySelectorAll(sel)) }
+function b(name, power,timing,risk){ return { name, power, timing, risk } }
+function w(name, type){ return { name, type } }
+function easeOutQuad(t){ return 1-(1-t)*(1-t) }
+function easeOutCubic(t){ return 1- Math.pow(1-t,3) }
+function lerp(a,b,t){ return a+(b-a)*t }
+function quadBezier(p0,p1,p2,t){ const u=1-t; return u*u*p0 + 2*u*t*p1 + t*t*p2 }
+function pctToPx(pt, el){
+  const r = el.getBoundingClientRect();
+  return { x: r.width*pt.x/100, y: r.height*pt.y/100 };
+}
+function onCircle(el, cxPct, ang, radius=0.85){
+  const r = el.getBoundingClientRect();
+  const cx = r.width*0.5, cy = r.height*0.58; // slightly below center for batting end
+  const rad = Math.min(r.width, r.height)*radius*0.5;
+  return { x: cx + Math.cos(ang)*rad, y: cy + Math.sin(ang)*rad };
+}
+
+/* --------------------------------- BOOT --------------------------------- */
+Game.computeOutcome = Game.computeOutcome.bind(Game);
+Game.resolveDelivery = Game.resolveDelivery.bind(Game);
+Game.startBall = Game.startBall.bind(Game);
+Game.endOfBall = Game.endOfBall.bind(Game);
+
+// Expose for console testing if desired (still namespaced)
+window.Game = Game;
+
+// Start after DOM is ready
+window.addEventListener('load', ()=>Game.init());
+
+// After init, override applyOutcome to ensure indicator zones computed each ball
+Game.applyOutcome = Game.applyOutcome.bind(Game);
+
+// Compute zones before every delivery start
+Game.el && Game.computeZonesForDelivery && Game.computeZonesForDelivery();
+</script>
 </body>
 </html>
